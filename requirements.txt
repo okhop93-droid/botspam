@@ -1,3 +1,3 @@
 telethon
 flask
-google-generativeai
+python-dotenv
