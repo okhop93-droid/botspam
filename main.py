@@ -22,8 +22,8 @@ AD_MESSAGE = """
 📱 Code random có thể dồn rút luôn📱
 """
 
-# Lưu trữ tạm thời trạng thái đăng nhập
-user_sessions = {}
+# Biến kiểm soát trạng thái spam
+is_spamming = False
 
 app = Flask('')
 @app.route('/')
@@ -40,46 +40,82 @@ async def start(event):
     msg = (
         "✅ **Hệ thống Master Bot sẵn sàng!**\n\n"
         "1️⃣ `/add` : Nạp số điện thoại mới.\n"
-        "2️⃣ Gửi file `.session` : Nạp file có sẵn.\n"
-        "3️⃣ `/join @linkgroup` : Dàn clone vào nhóm.\n"
-        "4️⃣ `/spam @linkgroup` : Bắt đầu rải tin."
+        "2️⃣ `/join @link` : Dàn clone vào nhóm.\n"
+        "3️⃣ `/spam @link` : Bắt đầu spam liên tục (10s/lần).\n"
+        "4️⃣ `/stop` : Dừng hệ thống spam."
     )
     await event.reply(msg)
 
-# --- CHỨC NĂNG NẠP TAY QUA SỐ ĐIỆN THOẠI ---
+# --- LỆNH DỪNG SPAM ---
+@master_bot.on(events.NewMessage(pattern='/stop'))
+async def stop_spam(event):
+    global is_spamming
+    if event.sender_id != ADMIN_ID: return
+    is_spamming = False
+    await event.reply("🛑 Đã nhận lệnh dừng spam!")
+
+# --- CHỨC NĂNG SPAM LIÊN TỤC 10S ---
+@master_bot.on(events.NewMessage(pattern='/spam'))
+async def start_spam(event):
+    global is_spamming
+    if event.sender_id != ADMIN_ID: return
+    
+    try:
+        target = event.text.split(' ', 1)[1]
+        sessions = [f for f in os.listdir(SESSION_DIR) if f.endswith('.session')]
+        
+        if not sessions:
+            await event.reply("❌ Không có tài khoản nào!")
+            return
+
+        is_spamming = True
+        await event.reply(f"🚀 Bắt đầu spam liên tục vào {target} (Mỗi 10s một lượt)...")
+
+        while is_spamming:
+            for s_file in sessions:
+                if not is_spamming: break # Kiểm tra lệnh dừng ngay trong lượt gửi
+                
+                c = TelegramClient(os.path.join(SESSION_DIR, s_file), API_ID, API_HASH)
+                try:
+                    await c.connect()
+                    await c.send_message(target, AD_MESSAGE)
+                    print(f"✅ Acc {s_file} đã gửi.")
+                except Exception as e:
+                    print(f"❌ Lỗi acc {s_file}: {e}")
+                finally:
+                    await c.disconnect()
+            
+            # Sau khi cả dàn gửi xong 1 lượt, nghỉ 10s rồi lặp lại
+            if is_spamming:
+                await asyncio.sleep(10) 
+                
+    except Exception as e:
+        await event.reply(f"⚠️ Lỗi: {str(e)}")
+
+# --- GIỮ NGUYÊN CÁC PHẦN CÒN LẠI (ADD, JOIN, HANDLE_DOCS) ---
 @master_bot.on(events.NewMessage(pattern='/add'))
 async def add_account(event):
     if event.sender_id != ADMIN_ID: return
     async with master_bot.conversation(event.chat_id) as conv:
-        await conv.send_message("📞 Nhập số điện thoại (định dạng: +84...):")
+        await conv.send_message("📞 Nhập số (+84...):")
         phone = (await conv.get_response()).text.strip()
-        
-        # Tạo tên session theo số điện thoại
         s_name = os.path.join(SESSION_DIR, f"{phone.replace('+', '')}.session")
         client = TelegramClient(s_name, API_ID, API_HASH)
         await client.connect()
-        
         try:
             if not await client.is_user_authorized():
-                # Gửi mã OTP
-                req = await client.send_code_request(phone)
-                await conv.send_message("📩 Nhập mã OTP bạn nhận được (VD: 12345):")
+                await client.send_code_request(phone)
+                await conv.send_message("📩 Nhập OTP:")
                 otp = (await conv.get_response()).text.strip()
-                
-                try:
-                    await client.sign_in(phone, otp)
+                try: await client.sign_in(phone, otp)
                 except errors.SessionPasswordNeededError:
-                    await conv.send_message("🔒 Tài khoản có mật khẩu 2 lớp. Nhập pass:")
+                    await conv.send_message("🔒 Nhập Pass 2FA:")
                     pwd = (await conv.get_response()).text.strip()
                     await client.sign_in(password=pwd)
-            
-            await conv.send_message(f"✅ Đã nạp thành công số: {phone}")
-        except Exception as e:
-            await conv.send_message(f"❌ Lỗi: {str(e)}")
-        finally:
-            await client.disconnect()
+            await conv.send_message(f"✅ Thành công: {phone}")
+        except Exception as e: await conv.send_message(f"❌ Lỗi: {e}")
+        finally: await client.disconnect()
 
-# --- CÁC CHỨC NĂNG CÒN LẠI ---
 @master_bot.on(events.NewMessage())
 async def handle_docs(event):
     if event.sender_id != ADMIN_ID or not event.document: return
@@ -105,24 +141,6 @@ async def join_groups(event):
         await event.reply(f"✅ Đã xong lệnh Join.")
     except: await event.reply("Sai cú pháp `/join @link`")
 
-@master_bot.on(events.NewMessage(pattern='/spam'))
-async def start_spam(event):
-    if event.sender_id != ADMIN_ID: return
-    try:
-        target = event.text.split(' ', 1)[1]
-        sessions = [f for f in os.listdir(SESSION_DIR) if f.endswith('.session')]
-        await event.reply(f"🚀 Đang spam {target}...")
-        for s_file in sessions:
-            c = TelegramClient(os.path.join(SESSION_DIR, s_file), API_ID, API_HASH)
-            try:
-                await c.connect()
-                await c.send_message(target, AD_MESSAGE)
-                await asyncio.sleep(5) 
-            except Exception as e:
-                await event.reply(f"❌ `{s_file}`: {e}")
-            finally: await c.disconnect()
-    except: await event.reply("Sai cú pháp `/spam @link`")
-
 async def main():
     await master_bot.start(bot_token=BOT_TOKEN)
     print("Bot online!")
@@ -131,4 +149,3 @@ async def main():
 if __name__ == "__main__":
     Thread(target=run_web, daemon=True).start()
     loop.run_until_complete(main())
-                
