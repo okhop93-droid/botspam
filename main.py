@@ -1,67 +1,106 @@
 import os
-import random
 import asyncio
-from telethon import TelegramClient, events
 from flask import Flask
 from threading import Thread
-import google.generativeai as genai
+from telethon import TelegramClient, events, errors
+from telethon.tl.functions.channels import JoinChannelRequest
 
-# --- CẤU HÌNH WEB GIỮ BOT SỐNG TRÊN RENDER ---
+# --- CẤU HÌNH (Giữ nguyên của bạn) ---
+API_ID = 36437338 
+API_HASH = '18d34c7efc396d277f3db62baa078efc'
+BOT_TOKEN = '8499499024:AAFSifEjBAKL2BSmanDDlXuRGh93zvZjM78'
+ADMIN_ID = 7816353760 
+
+SESSION_DIR = 'sessions'
+if not os.path.exists(SESSION_DIR): os.makedirs(SESSION_DIR)
+
+AD_MESSAGE = """
+🎁 XOCDIA88 Tặng Ae GiftCode May Mắn Lên Đến 88K
+🐶 Mời 2 Bạn Nhận Code Đánh Lên 50K Rút
+😁😀😐😁 @xocdia88thuongcoderbot
+💫 Lấy Nhiều Acc Mà Bào Nha Anh Chị Em - Rút Ngon Vaii
+📱 Code random có thể dồn rút luôn📱
+"""
+
 app = Flask('')
 @app.route('/')
-def home(): return "Bot Sao789 đang hoạt động!"
-def run_web(): app.run(host='0.0.0.0', port=8080)
+def home(): return "Hệ thống Clone đang chạy..."
+def run_web(): app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 10000)))
 
-# --- CẤU HÌNH AI (GEMINI) ---
-genai.configure(api_key="THAY_API_KEY_GEMINI_TAI_DAY")
-model = genai.GenerativeModel('gemini-pro')
+master_bot = TelegramClient('master_bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
-# --- CẤU HÌNH TELEGRAM ---
-api_id = 1234567          # Thay api_id của bạn
-api_hash = 'your_hash'    # Thay api_hash của bạn
-target_group = 'sao789fan'
+@master_bot.on(events.NewMessage(pattern='/start'))
+async def start(event):
+    if event.sender_id != ADMIN_ID: return
+    msg = (
+        "✅ **Hệ thống Master Bot sẵn sàng!**\n\n"
+        "1️⃣ Gửi file `.session` để nạp acc.\n"
+        "2️⃣ `/join @linkgroup` : Dàn clone tự tham gia nhóm.\n"
+        "3️⃣ `/setmsg [nội dung]` : Đổi tin nhắn quảng cáo.\n"
+        "4️⃣ `/spam @linkgroup` : Bắt đầu rải tin."
+    )
+    await event.reply(msg)
 
-client = TelegramClient('session_render', api_id, api_hash)
+# Nạp file session qua Bot
+@master_bot.on(events.NewMessage())
+async def handle_docs(event):
+    if event.sender_id != ADMIN_ID or not event.document: return
+    if event.document.attributes[0].file_name.endswith('.session'):
+        path = await event.download_media(file=SESSION_DIR)
+        await event.reply(f"📥 Đã nạp clone: `{os.path.basename(path)}`")
 
-async def get_ai_reply(user_msg):
+# Lệnh cho dàn clone JOIN vào nhóm (Bắt buộc phải join mới spam được)
+@master_bot.on(events.NewMessage(pattern='/join'))
+async def join_groups(event):
+    if event.sender_id != ADMIN_ID: return
     try:
-        prompt = (
-            f"Bạn là một người chơi lâu năm trong nhóm Sao789. "
-            f"Hãy trả lời tin nhắn sau cực kỳ ngắn gọn, dùng ngôn ngữ dân chơi, thân thiện. "
-            f"Dùng các từ như: ae, húp, uy tín, soi cầu, lộc, kkk, bú, căng. "
-            f"Tin nhắn: '{user_msg}'"
-        )
-        response = model.generate_content(prompt)
-        return response.text
+        target = event.text.split(' ', 1)[1]
+        sessions = [f for f in os.listdir(SESSION_DIR) if f.endswith('.session')]
+        await event.reply(f"🔄 Đang cho {len(sessions)} clone tham gia nhóm {target}...")
+        
+        for s_file in sessions:
+            client = TelegramClient(os.path.join(SESSION_DIR, s_file), API_ID, API_HASH)
+            try:
+                await client.connect()
+                await client(JoinChannelRequest(target))
+                await asyncio.sleep(5) # Tránh bị Telegram soi
+            except Exception as e:
+                print(f"Lỗi join: {e}")
+            finally:
+                await client.disconnect()
+        await event.reply(f"✅ Đã xong lệnh Join.")
     except:
-        return random.choice(["Húp lộc thôi ae", "Uy tín quá bác", "Kèo này thơm", "Lên là lên"])
+        await event.reply("⚠️ Sai cú pháp. VD: `/join @nhomchemgiovip`")
 
-@client.on(events.NewMessage(chats=target_group))
-async def handler(event):
-    # Không tự trả lời mình
-    me = await client.get_me()
-    if event.sender_id == me.id: return
-    
-    # Tỷ lệ trả lời 25% để giống người thật
-    if random.random() < 0.25:
-        # Giả lập thời gian đọc tin (5-15 giây)
-        await asyncio.sleep(random.randint(5, 15))
-        
-        reply_content = await get_ai_reply(event.text)
-        
-        async with client.action(event.chat_id, 'typing'):
-            # Giả lập thời gian gõ chữ
-            await asyncio.sleep(len(reply_content) * 0.1)
-            await event.reply(reply_content)
-            print(f"Đã chat: {reply_content}")
+@master_bot.on(events.NewMessage(pattern='/setmsg'))
+async def set_msg(event):
+    global AD_MESSAGE
+    if event.sender_id != ADMIN_ID: return
+    AD_MESSAGE = event.text.split('/setmsg ', 1)[1]
+    await event.reply(f"📝 Đã cập nhật nội dung!")
 
-async def bot_main():
-    await client.start()
-    print("Bot đã online!")
-    await client.run_until_disconnected()
+@master_bot.on(events.NewMessage(pattern='/spam'))
+async def start_spam(event):
+    if event.sender_id != ADMIN_ID: return
+    try:
+        target_group = event.text.split(' ', 1)[1]
+        sessions = [f for f in os.listdir(SESSION_DIR) if f.endswith('.session')]
+        await event.reply(f"🚀 Bắt đầu spam {target_group}...")
+
+        for s_file in sessions:
+            client = TelegramClient(os.path.join(SESSION_DIR, s_file), API_ID, API_HASH)
+            try:
+                await client.connect()
+                await client.send_message(target_group, AD_MESSAGE)
+                await asyncio.sleep(10) 
+            except Exception as e:
+                await event.reply(f"❌ `{s_file}` lỗi: {e}")
+            finally:
+                await client.disconnect()
+    except:
+        await event.reply("⚠️ Sai cú pháp. VD: `/spam @nhomchemgiovip`")
 
 if __name__ == "__main__":
     Thread(target=run_web).start()
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(bot_main())
-
+    master_bot.run_until_disconnected()
+    
